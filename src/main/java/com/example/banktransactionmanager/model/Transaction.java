@@ -81,4 +81,5 @@ public class Transaction extends BaseEntity{
     public void setLimitExceeded(boolean limitExceeded) {
         this.limitExceeded = limitExceeded;
     }
+
 }

@@ -17,6 +17,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 @Service
@@ -36,6 +39,7 @@ public class TransactionService {
         this.exchangeRatesApiUrl = exchangeRatesApiUrl;
     }
 
+    private final ExecutorService executor = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     public void processTransaction(Transaction transaction) {
         BigDecimal usdAmount = calculateUSDAmount(transaction);
@@ -47,12 +51,17 @@ public class TransactionService {
 
     private BigDecimal calculateUSDAmount(Transaction transaction) {
         Optional<ExchangeRate> exchangeRate = exchangeRateRepository.findByCurrencyPairAndRateDate(
-                transaction.getCurrency() + "/USD", LocalDateTime.from(transaction.getTransactionDate().toLocalDate()));
+                transaction.getCurrency() + "/USD", toStartOfDay(transaction.getTransactionDate()));
 
         BigDecimal rate = exchangeRate.orElseGet(() -> getLatestExchangeRate(transaction.getCurrency())).getRate();
 
         return transaction.getAmount().multiply(rate);
     }
+
+    private LocalDateTime toStartOfDay(LocalDateTime dateTime) {
+        return dateTime.toLocalDate().atStartOfDay();
+    }
+
 
     public ExchangeRate getLatestExchangeRate(String currency) {
         try {
@@ -69,7 +78,7 @@ public class TransactionService {
         }
     }
 
-    private void setLimitExceededFlag(Transaction transaction) {
+    public void setLimitExceededFlag(Transaction transaction) {
         Optional<SpendingLimit> limit = spendingLimitRepository.findByCategory(transaction.getExpenseCategory());
         if (limit.isPresent() && transaction.getAmount().compareTo(limit.get().getLimitAmount()) > 0) {
             transaction.setLimitExceeded(true);
@@ -94,6 +103,26 @@ public class TransactionService {
         transactionDto.setTransactionDate(transaction.getTransactionDate());
         transactionDto.setLimitExceeded(transaction.isLimitExceeded());
         return transactionDto;
+    }
+
+    //Implementing parallel execution of the algorithm for customer transactions in different currencies.
+    public CompletableFuture<Void> processTransactions(List<Transaction> transactions) {
+        List<CompletableFuture<Void>> futures = transactions.stream()
+                .map(this::processTransactionAsync).toList();
+
+        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+    }
+
+    private CompletableFuture<Void> processTransactionAsync(Transaction transaction) {
+        return CompletableFuture.runAsync(() -> {
+            try {
+                Thread.sleep(1000);
+                System.out.println("Processed transaction: " + transaction.getId());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                System.err.println("Thread interrupted while processing transaction: " + transaction.getId());
+            }
+        }, executor);
     }
 }
 
